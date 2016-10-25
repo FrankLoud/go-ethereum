@@ -425,7 +425,7 @@ func jitCalculateGasAndSize(env Environment, contract *Contract, instr instructi
 		}
 		gas.Set(g)
 	case SUICIDE:
-		if !statedb.HasSuicided(contract.Address()) {
+		if !statedb.IsDeleted(contract.Address()) {
 			statedb.AddRefund(params.SuicideRefundGas)
 		}
 	case MLOAD:

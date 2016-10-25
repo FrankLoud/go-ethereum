@@ -25,16 +25,12 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
-	"github.com/ethereum/go-ethereum/params"
 )
 
 // The default, always homestead, rule set for the vm env
 type ruleSet struct{}
 
 func (ruleSet) IsHomestead(*big.Int) bool { return true }
-func (ruleSet) GasTable(*big.Int) params.GasTable {
-	return params.GasTableHomesteadGasRepriceFork
-}
 
 // Config is a basic type specifying certain configuration flags for running
 // the EVM.
@@ -108,7 +104,7 @@ func Execute(code, input []byte, cfg *Config) ([]byte, *state.StateDB, error) {
 		receiver = cfg.State.CreateAccount(common.StringToAddress("contract"))
 	)
 	// set the receiver's (the executing contract) code for execution.
-	receiver.SetCode(crypto.Keccak256Hash(code), code)
+	receiver.SetCode(code)
 
 	// Call the code with the given configuration.
 	ret, err := vmenv.Call(

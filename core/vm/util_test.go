@@ -16,17 +16,10 @@
 
 package vm
 
-import (
-	"math/big"
-
-	"github.com/ethereum/go-ethereum/params"
-)
+import "math/big"
 
 type ruleSet struct {
 	hs *big.Int
 }
 
 func (r ruleSet) IsHomestead(n *big.Int) bool { return n.Cmp(r.hs) >= 0 }
-func (r ruleSet) GasTable(*big.Int) params.GasTable {
-	return params.GasTableHomestead
-}

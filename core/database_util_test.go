@@ -62,7 +62,7 @@ func (d *diffTest) UnmarshalJSON(b []byte) (err error) {
 	return nil
 }
 
-func TestCalcDifficulty(t *testing.T) {
+func TestDifficultyFrontier(t *testing.T) {
 	file, err := os.Open("../tests/files/BasicTests/difficulty.json")
 	if err != nil {
 		t.Fatal(err)
@@ -75,10 +75,9 @@ func TestCalcDifficulty(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	config := &ChainConfig{HomesteadBlock: big.NewInt(1150000)}
 	for name, test := range tests {
 		number := new(big.Int).Sub(test.CurrentBlocknumber, big.NewInt(1))
-		diff := CalcDifficulty(config, test.CurrentTimestamp, test.ParentTimestamp, number, test.ParentDifficulty)
+		diff := calcDifficultyFrontier(test.CurrentTimestamp, test.ParentTimestamp, number, test.ParentDifficulty)
 		if diff.Cmp(test.CurrentDifficulty) != 0 {
 			t.Error(name, "failed. Expected", test.CurrentDifficulty, "and calculated", diff)
 		}

@@ -17,7 +17,6 @@
 package eth
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -288,7 +287,7 @@ func (pm *ProtocolManager) handle(p *peer) error {
 		}
 		// Start a timer to disconnect if the peer doesn't reply in time
 		p.forkDrop = time.AfterFunc(daoChallengeTimeout, func() {
-			glog.V(logger.Debug).Infof("%v: timed out DAO fork-check, dropping", p)
+			glog.V(logger.Warn).Infof("%v: timed out DAO fork-check, dropping", p)
 			pm.removePeer(p.id)
 		})
 		// Make sure it's cleaned up if the peer dies off
@@ -370,24 +369,14 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 				}
 			case query.Origin.Hash != (common.Hash{}) && !query.Reverse:
 				// Hash based traversal towards the leaf block
-				var (
-					current = origin.Number.Uint64()
-					next    = current + query.Skip + 1
-				)
-				if next <= current {
-					infos, _ := json.MarshalIndent(p.Peer.Info(), "", "  ")
-					glog.V(logger.Warn).Infof("%v: GetBlockHeaders skip overflow attack (current %v, skip %v, next %v)\nMalicious peer infos: %s", p, current, query.Skip, next, infos)
-					unknown = true
-				} else {
-					if header := pm.blockchain.GetHeaderByNumber(next); header != nil {
-						if pm.blockchain.GetBlockHashesFromHash(header.Hash(), query.Skip+1)[query.Skip] == query.Origin.Hash {
-							query.Origin.Hash = header.Hash()
-						} else {
-							unknown = true
-						}
+				if header := pm.blockchain.GetHeaderByNumber(origin.Number.Uint64() + query.Skip + 1); header != nil {
+					if pm.blockchain.GetBlockHashesFromHash(header.Hash(), query.Skip+1)[query.Skip] == query.Origin.Hash {
+						query.Origin.Hash = header.Hash()
 					} else {
 						unknown = true
 					}
+				} else {
+					unknown = true
 				}
 			case query.Reverse:
 				// Number based traversal towards the genesis block
@@ -689,7 +678,7 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 			}
 			p.MarkTransaction(tx.Hash())
 		}
-		pm.txpool.AddBatch(txs)
+		pm.txpool.AddTransactions(txs)
 
 	default:
 		return errResp(ErrInvalidMsgCode, "%v", msg.Code)

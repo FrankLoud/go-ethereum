@@ -45,10 +45,7 @@ type txsync struct {
 
 // syncTransactions starts sending all currently pending transactions to the given peer.
 func (pm *ProtocolManager) syncTransactions(p *peer) {
-	var txs types.Transactions
-	for _, batch := range pm.txpool.Pending() {
-		txs = append(txs, batch...)
-	}
+	txs := pm.txpool.GetTransactions()
 	if len(txs) == 0 {
 		return
 	}

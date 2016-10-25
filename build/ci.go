@@ -120,6 +120,8 @@ func main() {
 		doArchive(os.Args[2:])
 	case "debsrc":
 		doDebianSource(os.Args[2:])
+	case "travis-debsrc":
+		doTravisDebianSource(os.Args[2:])
 	case "xgo":
 		doXgo(os.Args[2:])
 	default:
@@ -130,8 +132,8 @@ func main() {
 // Compiling
 
 func doInstall(cmdline []string) {
+	commitHash := flag.String("gitcommit", "", "Git commit hash embedded into binary.")
 	flag.CommandLine.Parse(cmdline)
-	env := build.Env()
 
 	// Check Go version. People regularly open issues about compilation
 	// failure with outdated Go. This should save them the trouble.
@@ -148,17 +150,13 @@ func doInstall(cmdline []string) {
 		packages = flag.Args()
 	}
 
-	goinstall := goTool("install", buildFlags(env)...)
+	goinstall := goTool("install", makeBuildFlags(*commitHash)...)
 	goinstall.Args = append(goinstall.Args, "-v")
 	goinstall.Args = append(goinstall.Args, packages...)
 	build.MustRun(goinstall)
 }
 
-func buildFlags(env build.Environment) (flags []string) {
-	if os.Getenv("GO_OPENCL") != "" {
-		flags = append(flags, "-tags", "opencl")
-	}
-
+func makeBuildFlags(commitHash string) (flags []string) {
 	// Since Go 1.5, the separator char for link time assignments
 	// is '=' and using ' ' prints a warning. However, Go < 1.5 does
 	// not support using '='.
@@ -166,9 +164,26 @@ func buildFlags(env build.Environment) (flags []string) {
 	if runtime.Version() > "go1.5" || strings.Contains(runtime.Version(), "devel") {
 		sep = "="
 	}
-	// Set gitCommit constant via link-time assignment.
-	if env.Commit != "" {
-		flags = append(flags, "-ldflags", "-X main.gitCommit"+sep+env.Commit)
+
+	if os.Getenv("GO_OPENCL") != "" {
+		flags = append(flags, "-tags", "opencl")
+	}
+
+	// Set gitCommit constant via link-time assignment. If this is a git checkout, we can
+	// just get the current commit hash through git. Otherwise we fall back to the hash
+	// that was passed as -gitcommit.
+	//
+	// -gitcommit is required for Debian package builds. The source package doesn't
+	// contain .git but we still want to embed the commit hash into the packaged binary.
+	// The hash is rendered into the debian/rules build script when the source package is
+	// created.
+	if _, err := os.Stat(filepath.Join(".git", "HEAD")); !os.IsNotExist(err) {
+		if c := build.GitCommit(); c != "" {
+			commitHash = c
+		}
+	}
+	if commitHash != "" {
+		flags = append(flags, "-ldflags", "-X main.gitCommit"+sep+commitHash)
 	}
 	return flags
 }
@@ -212,9 +227,6 @@ func doTest(cmdline []string) {
 
 	// Run the actual tests.
 	gotest := goTool("test")
-	// Test a single package at a time. CI builders are slow
-	// and some tests run into timeouts under load.
-	gotest.Args = append(gotest.Args, "-p", "1")
 	if *coverage {
 		gotest.Args = append(gotest.Args, "-covermode=atomic", "-cover")
 	}
@@ -238,11 +250,7 @@ func doArchive(cmdline []string) {
 	default:
 		log.Fatal("unknown archive type: ", atype)
 	}
-
-	env := build.Env()
-	maybeSkipArchive(env)
-
-	base := archiveBasename(env)
+	base := makeArchiveBasename()
 	if err := build.WriteArchive("geth-"+base, ext, gethArchiveFiles); err != nil {
 		log.Fatal(err)
 	}
@@ -251,41 +259,36 @@ func doArchive(cmdline []string) {
 	}
 }
 
-func archiveBasename(env build.Environment) string {
+func makeArchiveBasename() string {
 	// date := time.Now().UTC().Format("200601021504")
 	platform := runtime.GOOS + "-" + runtime.GOARCH
 	archive := platform + "-" + build.VERSION()
-	if env.Commit != "" {
-		archive += "-" + env.Commit[:8]
+	if commit := build.GitCommit(); commit != "" {
+		archive += "-" + commit[:8]
 	}
 	return archive
 }
 
-// skips archiving for some build configurations.
-func maybeSkipArchive(env build.Environment) {
-	if env.IsPullRequest {
-		log.Printf("skipping because this is a PR build")
-		os.Exit(0)
-	}
-	if env.Branch != "develop" && !strings.HasPrefix(env.Tag, "v1.") {
-		log.Printf("skipping because branch %q, tag %q is not on the whitelist", env.Branch, env.Tag)
-		os.Exit(0)
-	}
-}
-
 // Debian Packaging
 
-func doDebianSource(cmdline []string) {
-	var (
-		signer  = flag.String("signer", "", `Signing key name, also used as package author`)
-		upload  = flag.String("upload", "", `Where to upload the source package (usually "ppa:ethereum/ethereum")`)
-		workdir = flag.String("workdir", "", `Output directory for packages (uses temp dir if unset)`)
-		now     = time.Now()
-	)
+// CLI entry point for Travis CI.
+func doTravisDebianSource(cmdline []string) {
 	flag.CommandLine.Parse(cmdline)
-	*workdir = makeWorkdir(*workdir)
-	env := build.Env()
-	maybeSkipArchive(env)
+
+	// Package only whitelisted branches.
+	switch {
+	case os.Getenv("TRAVIS_REPO_SLUG") != "ethereum/go-ethereum":
+		log.Printf("skipping because this is a fork build")
+		return
+	case os.Getenv("TRAVIS_PULL_REQUEST") != "false":
+		log.Printf("skipping because this is a PR build")
+		return
+	case os.Getenv("TRAVIS_BRANCH") != "develop" && !strings.HasPrefix(os.Getenv("TRAVIS_TAG"), "v1."):
+		log.Printf("skipping because branch %q tag %q is not on the whitelist",
+			os.Getenv("TRAVIS_BRANCH"),
+			os.Getenv("TRAVIS_TAG"))
+		return
+	}
 
 	// Import the signing key.
 	if b64key := os.Getenv("PPA_SIGNING_KEY"); b64key != "" {
@@ -298,16 +301,46 @@ func doDebianSource(cmdline []string) {
 		build.MustRun(gpg)
 	}
 
-	// Create the packages.
+	// Assign unstable status to non-tag builds.
+	unstable := "true"
+	if os.Getenv("TRAVIS_BRANCH") != "develop" && os.Getenv("TRAVIS_TAG") != "" {
+		unstable = "false"
+	}
+
+	doDebianSource([]string{
+		"-signer", "Felix Lange (Geth CI Testing Key) <fjl@twurst.com>",
+		"-buildnum", os.Getenv("TRAVIS_BUILD_NUMBER"),
+		"-upload", "ppa:lp-fjl/geth-ci-testing",
+		"-unstable", unstable,
+	})
+}
+
+// CLI entry point for doing packaging locally.
+func doDebianSource(cmdline []string) {
+	var (
+		signer   = flag.String("signer", "", `Signing key name, also used as package author`)
+		upload   = flag.String("upload", "", `Where to upload the source package (usually "ppa:ethereum/ethereum")`)
+		buildnum = flag.String("buildnum", "", `Build number (included in version)`)
+		unstable = flag.Bool("unstable", false, `Use package name suffix "-unstable"`)
+		now      = time.Now()
+	)
+	flag.CommandLine.Parse(cmdline)
+
+	// Create the debian worktree in /tmp.
+	tmpdir, err := ioutil.TempDir("", "eth-deb-build-")
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	for _, distro := range debDistros {
-		meta := newDebMetadata(distro, *signer, env, now)
-		pkgdir := stageDebianSource(*workdir, meta)
+		meta := newDebMetadata(distro, *signer, *buildnum, *unstable, now)
+		pkgdir := stageDebianSource(tmpdir, meta)
 		debuild := exec.Command("debuild", "-S", "-sa", "-us", "-uc")
 		debuild.Dir = pkgdir
 		build.MustRun(debuild)
 
 		changes := fmt.Sprintf("%s_%s_source.changes", meta.Name(), meta.VersionString())
-		changes = filepath.Join(*workdir, changes)
+		changes = filepath.Join(tmpdir, changes)
 		if *signer != "" {
 			build.MustRunCommand("debsign", changes)
 		}
@@ -317,53 +350,35 @@ func doDebianSource(cmdline []string) {
 	}
 }
 
-func makeWorkdir(wdflag string) string {
-	var err error
-	if wdflag != "" {
-		err = os.MkdirAll(wdflag, 0744)
-	} else {
-		wdflag, err = ioutil.TempDir("", "eth-deb-build-")
-	}
-	if err != nil {
-		log.Fatal(err)
-	}
-	return wdflag
-}
-
-func isUnstableBuild(env build.Environment) bool {
-	if env.Branch != "develop" && env.Tag != "" {
-		return false
-	}
-	return true
+type debExecutable struct {
+	Name, Description string
 }
 
 type debMetadata struct {
-	Env build.Environment
-
 	// go-ethereum version being built. Note that this
 	// is not the debian package version. The package version
 	// is constructed by VersionString.
 	Version string
 
-	Author       string // "name <email>", also selects signing key
-	Distro, Time string
-	Executables  []debExecutable
+	Author               string // "name <email>", also selects signing key
+	Buildnum             string // build number
+	Distro, Commit, Time string
+	Executables          []debExecutable
+	Unstable             bool
 }
 
-type debExecutable struct {
-	Name, Description string
-}
-
-func newDebMetadata(distro, author string, env build.Environment, t time.Time) debMetadata {
+func newDebMetadata(distro, author, buildnum string, unstable bool, t time.Time) debMetadata {
 	if author == "" {
 		// No signing key, use default author.
 		author = "Ethereum Builds <fjl@ethereum.org>"
 	}
 	return debMetadata{
-		Env:         env,
+		Unstable:    unstable,
 		Author:      author,
 		Distro:      distro,
+		Commit:      build.GitCommit(),
 		Version:     build.VERSION(),
+		Buildnum:    buildnum,
 		Time:        t.Format(time.RFC1123Z),
 		Executables: debExecutables,
 	}
@@ -372,7 +387,7 @@ func newDebMetadata(distro, author string, env build.Environment, t time.Time) d
 // Name returns the name of the metapackage that depends
 // on all executable packages.
 func (meta debMetadata) Name() string {
-	if isUnstableBuild(meta.Env) {
+	if meta.Unstable {
 		return "ethereum-unstable"
 	}
 	return "ethereum"
@@ -381,8 +396,8 @@ func (meta debMetadata) Name() string {
 // VersionString returns the debian version of the packages.
 func (meta debMetadata) VersionString() string {
 	vsn := meta.Version
-	if meta.Env.Buildnum != "" {
-		vsn += "+build" + meta.Env.Buildnum
+	if meta.Buildnum != "" {
+		vsn += "+build" + meta.Buildnum
 	}
 	if meta.Distro != "" {
 		vsn += "+" + meta.Distro
@@ -401,7 +416,7 @@ func (meta debMetadata) ExeList() string {
 
 // ExeName returns the package name of an executable package.
 func (meta debMetadata) ExeName(exe debExecutable) string {
-	if isUnstableBuild(meta.Env) {
+	if meta.Unstable {
 		return exe.Name + "-unstable"
 	}
 	return exe.Name
@@ -410,7 +425,7 @@ func (meta debMetadata) ExeName(exe debExecutable) string {
 // ExeConflicts returns the content of the Conflicts field
 // for executable packages.
 func (meta debMetadata) ExeConflicts(exe debExecutable) string {
-	if isUnstableBuild(meta.Env) {
+	if meta.Unstable {
 		// Set up the conflicts list so that the *-unstable packages
 		// cannot be installed alongside the regular version.
 		//
@@ -443,8 +458,8 @@ func stageDebianSource(tmpdir string, meta debMetadata) (pkgdir string) {
 	build.RenderString("8\n", filepath.Join(debian, "compat"), 0644, meta)
 	build.RenderString("3.0 (native)\n", filepath.Join(debian, "source/format"), 0644, meta)
 	for _, exe := range meta.Executables {
-		install := filepath.Join(debian, meta.ExeName(exe)+".install")
-		docs := filepath.Join(debian, meta.ExeName(exe)+".docs")
+		install := filepath.Join(debian, exe.Name+".install")
+		docs := filepath.Join(debian, exe.Name+".docs")
 		build.Render("build/deb.install", install, 0644, exe)
 		build.Render("build/deb.docs", docs, 0644, exe)
 	}
@@ -455,19 +470,18 @@ func stageDebianSource(tmpdir string, meta debMetadata) (pkgdir string) {
 // Cross compilation
 
 func doXgo(cmdline []string) {
-	flag.CommandLine.Parse(cmdline)
-	env := build.Env()
-
 	// Make sure xgo is available for cross compilation
 	gogetxgo := goTool("get", "github.com/karalabe/xgo")
 	build.MustRun(gogetxgo)
 
 	// Execute the actual cross compilation
-	xgo := xgoTool(append(buildFlags(env), flag.Args()...))
-	build.MustRun(xgo)
+	pkg := cmdline[len(cmdline)-1]
+	args := append(cmdline[:len(cmdline)-1], makeBuildFlags("")...)
+
+	build.MustRun(xgoTool(append(args, pkg)...))
 }
 
-func xgoTool(args []string) *exec.Cmd {
+func xgoTool(args ...string) *exec.Cmd {
 	cmd := exec.Command(filepath.Join(GOBIN, "xgo"), args...)
 	cmd.Env = []string{
 		"GOPATH=" + build.GOPATH(),

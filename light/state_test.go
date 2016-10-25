@@ -42,6 +42,7 @@ func (odr *testOdr) Retrieve(ctx context.Context, req OdrRequest) error {
 	case *TrieRequest:
 		t, _ := trie.New(req.root, odr.sdb)
 		req.proof = t.Prove(req.key)
+		trie.ClearGlobalCache()
 	case *NodeDataRequest:
 		req.data, _ = odr.sdb.Get(req.hash[:])
 	}
@@ -53,13 +54,16 @@ func makeTestState() (common.Hash, ethdb.Database) {
 	sdb, _ := ethdb.NewMemDatabase()
 	st, _ := state.New(common.Hash{}, sdb)
 	for i := byte(0); i < 100; i++ {
-		addr := common.Address{i}
+		so := st.GetOrNewStateObject(common.Address{i})
 		for j := byte(0); j < 100; j++ {
-			st.SetState(addr, common.Hash{j}, common.Hash{i, j})
+			val := common.Hash{i, j}
+			so.SetState(common.Hash{j}, val)
+			so.SetNonce(100)
 		}
-		st.SetNonce(addr, 100)
-		st.AddBalance(addr, big.NewInt(int64(i)))
-		st.SetCode(addr, []byte{i, i, i})
+		so.AddBalance(big.NewInt(int64(i)))
+		so.SetCode([]byte{i, i, i})
+		so.Update()
+		st.UpdateStateObject(so)
 	}
 	root, _ := st.Commit()
 	return root, sdb
@@ -71,6 +75,7 @@ func TestLightStateOdr(t *testing.T) {
 	odr := &testOdr{sdb: sdb, ldb: ldb}
 	ls := NewLightState(root, odr)
 	ctx := context.Background()
+	trie.ClearGlobalCache()
 
 	for i := byte(0); i < 100; i++ {
 		addr := common.Address{i}
@@ -155,6 +160,7 @@ func TestLightStateSetCopy(t *testing.T) {
 	odr := &testOdr{sdb: sdb, ldb: ldb}
 	ls := NewLightState(root, odr)
 	ctx := context.Background()
+	trie.ClearGlobalCache()
 
 	for i := byte(0); i < 100; i++ {
 		addr := common.Address{i}
@@ -231,6 +237,7 @@ func TestLightStateDelete(t *testing.T) {
 	odr := &testOdr{sdb: sdb, ldb: ldb}
 	ls := NewLightState(root, odr)
 	ctx := context.Background()
+	trie.ClearGlobalCache()
 
 	addr := common.Address{42}
 

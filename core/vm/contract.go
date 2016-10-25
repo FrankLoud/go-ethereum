@@ -27,7 +27,7 @@ type ContractRef interface {
 	ReturnGas(*big.Int, *big.Int)
 	Address() common.Address
 	Value() *big.Int
-	SetCode(common.Hash, []byte)
+	SetCode([]byte)
 	ForEachStorage(callback func(key, value common.Hash) bool)
 }
 
@@ -44,9 +44,8 @@ type Contract struct {
 	jumpdests destinations // result of JUMPDEST analysis.
 
 	Code     []byte
-	CodeHash common.Hash
-	CodeAddr *common.Address
 	Input    []byte
+	CodeAddr *common.Address
 
 	value, Gas, UsedGas, Price *big.Int
 
@@ -144,16 +143,14 @@ func (c *Contract) Value() *big.Int {
 }
 
 // SetCode sets the code to the contract
-func (self *Contract) SetCode(hash common.Hash, code []byte) {
+func (self *Contract) SetCode(code []byte) {
 	self.Code = code
-	self.CodeHash = hash
 }
 
 // SetCallCode sets the code of the contract and address of the backing data
 // object
-func (self *Contract) SetCallCode(addr *common.Address, hash common.Hash, code []byte) {
+func (self *Contract) SetCallCode(addr *common.Address, code []byte) {
 	self.Code = code
-	self.CodeHash = hash
 	self.CodeAddr = addr
 }
 

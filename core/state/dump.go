@@ -21,10 +21,9 @@ import (
 	"fmt"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/rlp"
 )
 
-type DumpAccount struct {
+type Account struct {
 	Balance  string            `json:"balance"`
 	Nonce    uint64            `json:"nonce"`
 	Root     string            `json:"root"`
@@ -33,41 +32,40 @@ type DumpAccount struct {
 	Storage  map[string]string `json:"storage"`
 }
 
-type Dump struct {
-	Root     string                 `json:"root"`
-	Accounts map[string]DumpAccount `json:"accounts"`
+type World struct {
+	Root     string             `json:"root"`
+	Accounts map[string]Account `json:"accounts"`
 }
 
-func (self *StateDB) RawDump() Dump {
-	dump := Dump{
+func (self *StateDB) RawDump() World {
+	world := World{
 		Root:     common.Bytes2Hex(self.trie.Root()),
-		Accounts: make(map[string]DumpAccount),
+		Accounts: make(map[string]Account),
 	}
 
 	it := self.trie.Iterator()
 	for it.Next() {
 		addr := self.trie.GetKey(it.Key)
-		var data Account
-		if err := rlp.DecodeBytes(it.Value, &data); err != nil {
+		stateObject, err := DecodeObject(common.BytesToAddress(addr), self.db, it.Value)
+		if err != nil {
 			panic(err)
 		}
 
-		obj := newObject(nil, common.BytesToAddress(addr), data, nil)
-		account := DumpAccount{
-			Balance:  data.Balance.String(),
-			Nonce:    data.Nonce,
-			Root:     common.Bytes2Hex(data.Root[:]),
-			CodeHash: common.Bytes2Hex(data.CodeHash),
-			Code:     common.Bytes2Hex(obj.Code(self.db)),
+		account := Account{
+			Balance:  stateObject.balance.String(),
+			Nonce:    stateObject.nonce,
+			Root:     common.Bytes2Hex(stateObject.Root()),
+			CodeHash: common.Bytes2Hex(stateObject.codeHash),
+			Code:     common.Bytes2Hex(stateObject.Code()),
 			Storage:  make(map[string]string),
 		}
-		storageIt := obj.getTrie(self.db).Iterator()
+		storageIt := stateObject.trie.Iterator()
 		for storageIt.Next() {
 			account.Storage[common.Bytes2Hex(self.trie.GetKey(storageIt.Key))] = common.Bytes2Hex(storageIt.Value)
 		}
-		dump.Accounts[common.Bytes2Hex(addr)] = account
+		world.Accounts[common.Bytes2Hex(addr)] = account
 	}
-	return dump
+	return world
 }
 
 func (self *StateDB) Dump() []byte {
@@ -77,4 +75,13 @@ func (self *StateDB) Dump() []byte {
 	}
 
 	return json
+}
+
+// Debug stuff
+func (self *StateObject) CreateOutputForDiff() {
+	fmt.Printf("%x %x %x %x\n", self.Address(), self.Root(), self.balance.Bytes(), self.nonce)
+	it := self.trie.Iterator()
+	for it.Next() {
+		fmt.Printf("%x %x\n", it.Key, it.Value)
+	}
 }

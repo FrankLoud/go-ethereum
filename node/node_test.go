@@ -514,32 +514,12 @@ func TestAPIGather(t *testing.T) {
 	}{
 		"Zero APIs": {[]rpc.API{}, InstrumentedServiceMakerA},
 		"Single API": {[]rpc.API{
-			{
-				Namespace: "single",
-				Version:   "1",
-				Service:   &OneMethodApi{fun: func() { calls <- "single.v1" }},
-				Public:    true,
-			},
+			{"single", "1", &OneMethodApi{fun: func() { calls <- "single.v1" }}, true},
 		}, InstrumentedServiceMakerB},
 		"Many APIs": {[]rpc.API{
-			{
-				Namespace: "multi",
-				Version:   "1",
-				Service:   &OneMethodApi{fun: func() { calls <- "multi.v1" }},
-				Public:    true,
-			},
-			{
-				Namespace: "multi.v2",
-				Version:   "2",
-				Service:   &OneMethodApi{fun: func() { calls <- "multi.v2" }},
-				Public:    true,
-			},
-			{
-				Namespace: "multi.v2.nested",
-				Version:   "2",
-				Service:   &OneMethodApi{fun: func() { calls <- "multi.v2.nested" }},
-				Public:    true,
-			},
+			{"multi", "1", &OneMethodApi{fun: func() { calls <- "multi.v1" }}, true},
+			{"multi.v2", "2", &OneMethodApi{fun: func() { calls <- "multi.v2" }}, true},
+			{"multi.v2.nested", "2", &OneMethodApi{fun: func() { calls <- "multi.v2.nested" }}, true},
 		}, InstrumentedServiceMakerC},
 	}
 	for id, config := range services {
